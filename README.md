@@ -1,9 +1,24 @@
-EC2 to RDS MySQL Connectivity Lab (AWS)
-Overview
+EC2 → RDS MySQL Private Connectivity Lab (AWS Console)
+What this demonstrates (why a recruiter should care)
 
-This lab demonstrates secure, private connectivity between an Amazon EC2 instance and an Amazon RDS MySQL database within a VPC. The architecture follows AWS best practices by keeping the database private and restricting access using security group references instead of public CIDR ranges.
+This lab proves I can deploy a private RDS MySQL database and securely connect to it from an EC2 instance inside the same VPC using Security Group–to–Security Group access (no public database exposure, no open CIDR ranges).
 
-Architecture
+In real environments, this pattern is used for:
+
+Web/app servers connecting to private databases
+
+Removing public attack surface (no public DB)
+
+Least-access networking using SG references instead of 0.0.0.0/0
+
+Target outcome (success criteria)
+
+✅ EC2 can connect to RDS using the private endpoint
+✅ RDS is not publicly accessible
+✅ RDS inbound rule allows MySQL 3306 only from EC2 Security Group
+✅ I can run real SQL operations: create DB, create table, insert, select
+
+Architecture (high level)
 
 EC2: Amazon Linux 2023
 
@@ -11,69 +26,189 @@ RDS: MySQL 8.0 (db.t3.micro)
 
 Networking:
 
-RDS deployed in private subnets
+RDS deployed into private subnets
 
-EC2 deployed in a VPC with outbound access
+DB Subnet Group includes 2 subnets in different AZs
 
 Security:
 
-RDS not publicly accessible
+RDS inbound: MySQL 3306 from EC2 Security Group only
 
-RDS Security Group allows inbound MySQL (3306) only from EC2 Security Group
+No public database access
 
-No 0.0.0.0/0 access
+Step-by-step (AWS Console)
+Step 1 — Create/confirm your private DB subnet group
 
-Key AWS Services Used
+Why: RDS must live in private subnets for secure architecture (no public exposure).
 
-Amazon EC2
+Go to RDS → Subnet groups → Create DB subnet group
 
-Amazon RDS (MySQL)
+Name: armproj-rds-private-subnet-group
 
-Amazon VPC
+Select your Lab VPC
 
-Security Groups (SG → SG reference)
+Select ONLY private subnets
 
-AWS Secrets Manager
+Must include at least 2 subnets in different AZs
 
-EC2 Instance Connect
+Create subnet group
 
-Steps Performed
-1. Provisioned RDS
+✅ Result: RDS can be placed privately and multi-AZ-capable.
 
-Engine: MySQL 8.0
+Step 2 — Create the RDS MySQL instance (private)
 
-Instance class: db.t3.micro
+Why: Database should never be directly exposed to the internet.
 
-Private DB subnet group (multiple AZ-capable)
+Go to RDS → Databases → Create database
 
-Credentials stored in AWS Secrets Manager
+Engine: MySQL
 
-2. Provisioned EC2
+Template: Free tier / Dev/Test (lab use)
 
-Amazon Linux 2023
+Instance class: db.t3.micro (cheapest for this lab)
 
-Connected using EC2 Instance Connect
+Storage: default is fine
 
-Installed MariaDB/MySQL-compatible client
+Connectivity:
 
-3. Security Configuration
+Select your Lab VPC
 
-RDS inbound rule:
+DB subnet group: armproj-rds-private-subnet-group
+
+Public access: NO ✅
+
+Authentication:
+
+Master username: admin
+
+Store credentials in Secrets Manager (recommended)
+
+Create database
+
+✅ Result: RDS shows Status: Available and Publicly accessible: No
+
+Step 3 — Create the security groups (secure DB access)
+
+Why: The correct best-practice is SG → SG access, not CIDR blocks.
+
+3A) EC2 Security Group (example)
+
+Inbound:
+
+SSH (22) from your IP (or Instance Connect handles this)
+Outbound:
+
+Allow all outbound (default)
+
+3B) RDS Security Group (critical rule)
+
+Inbound:
+
+Type: MySQL/Aurora
 
 Port: 3306
 
-Source: EC2 Security Group
+Source: EC2 Security Group (NOT 0.0.0.0/0)
 
-No public database exposure
+✅ Result: Only the EC2 instance can talk to the database.
 
-4. Verified Connectivity
+Note: If the rule was previously created with a CIDR like 0.0.0.0/0, AWS won’t let you “convert” it to a security group reference. The fix is to delete the CIDR rule and recreate it as SG → SG.
 
-Connected from EC2 to RDS using:
+Step 4 — Confirm RDS connection details (endpoint + port)
 
-mysql -h <rds-endpoint> -P 3306 -u admin -p
+Why: The endpoint is how your app/EC2 knows where the database lives.
 
-5. Database Validation
+Go to RDS → Databases → (your DB) → Connectivity & security
+
+Copy:
+
+Endpoint: database-armproject.cijmucwoo5ud.us-east-1.rds.amazonaws.com
+
+Port: 3306
+
+Step 5 — Connect to EC2 using EC2 Instance Connect (browser SSH)
+
+Why: Fast access without local SSH key configuration.
+
+Go to EC2 → Instances → (your instance) → Connect
+
+Choose EC2 Instance Connect
+
+Click Connect
+
+✅ Result: You see a terminal prompt like:
+
+ec2-user@ip-10-x-x-x:~$
+
+Step 6 — Install MySQL client on Amazon Linux 2023
+
+Why: Amazon Linux 2023 doesn’t have a package named mysql. MariaDB client is wire-compatible.
+
+Attempting:
+
+sudo dnf install -y mysql
+
+
+Expected:
+
+No match for argument: mysql
+
+Correct install:
+
+sudo dnf install -y mariadb105
+
+
+Verify:
+
+mysql --version
+
+
+✅ Result:
+
+mysql  Ver 15.1 Distrib 10.5.x-MariaDB...
+
+Step 7 — Retrieve DB password from Secrets Manager
+
+Why: Credentials should be stored securely, not hardcoded.
+
+Go to Secrets Manager
+
+Open the secret (example name pattern):
+
+rds!db-...
+
+Click Retrieve secret value
+
+Copy the value from the JSON:
+
+"password": "..."
+
+✅ Important: The secret name is not the password.
+
+Step 8 — Connect from EC2 to RDS (final connectivity test)
+
+Run:
+
+mysql \
+-h database-armproject.cijmucwoo5ud.us-east-1.rds.amazonaws.com \
+-P 3306 \
+-u admin \
+-p
+
+
+Paste the password when prompted.
+
+✅ Success looks like:
+
+Welcome to the MariaDB monitor...
+MySQL [(none)]>
+
+Step 9 — Prove database operations work (SQL validation)
+
+Run these inside the MySQL [(none)]> prompt:
+
 SHOW DATABASES;
+
 CREATE DATABASE armprojectdb;
 USE armprojectdb;
 
@@ -88,30 +223,44 @@ VALUES ('EC2 connected to RDS successfully');
 SELECT * FROM test_table;
 
 
-Successful query output confirmed end-to-end connectivity.
+✅ Expected output includes the inserted row, proving read/write capability.
 
-Outcome
+Results / Proof
 
-✅ Private EC2 → Private RDS connectivity
+✅ EC2 → private RDS connectivity established
 
-✅ Secure SG-to-SG access
+✅ RDS not publicly accessible
 
-✅ Database operations validated
+✅ Access restricted via SG → SG reference
 
-✅ Production-aligned AWS architecture
+✅ DB operations successful (create DB/table, insert/select)
 
-Cleanup
+Cleanup (to avoid costs)
 
-All resources were safely terminated after validation to prevent ongoing costs.
+Recommended teardown order:
 
-Skills Demonstrated
+Delete RDS instance (largest cost driver)
 
-AWS networking fundamentals
+Terminate EC2 instance
 
-Secure database access patterns
+Delete RDS security group (if lab-specific)
 
-Linux administration (Amazon Linux 2023)
+Delete DB subnet group (if lab-specific)
 
-MySQL database operations
+Delete VPC resources (if dedicated lab VPC)
 
-AWS security best practices
+Skills demonstrated
+
+AWS VPC + subnet architecture for private databases
+
+RDS provisioning and secure configuration
+
+Security group referencing (least access)
+
+EC2 Instance Connect operations
+
+Linux package management (Amazon Linux 2023)
+
+MySQL administration and validation queries
+
+Secrets Manager credential handling
